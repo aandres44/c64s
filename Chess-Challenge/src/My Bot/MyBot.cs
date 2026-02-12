@@ -6,7 +6,7 @@ public class MyBot : IChessBot
 {
 
     private ulong nodeCount; // counter of explored nodes.
-    private const float MAX = 1000000;
+    private const int MAX = 1000000;
 
     public enum PieceValue
     {
@@ -19,12 +19,27 @@ public class MyBot : IChessBot
         King = 10000
     }
 
+    const int TT_SIZE = 1 << 21; // 2M entries
+
+    struct TTEntry
+    {
+        public ulong Key;
+        public int Score;
+        public int Depth;
+        public byte Flag;     // 0 = exact, 1 = lower bound, 2 = upper bound
+        public Move BestMove;
+    }
+
+    TTEntry[] TT = new TTEntry[TT_SIZE];
+
+    static int TTIndex(ulong key) => (int)(key & (TT_SIZE - 1));
+
     public Move Think(Board board, Timer timer)
     {
         return Solve(board, timer);
     }
 
-    public static float Evaluate(Board B)
+    static int Evaluate(Board B)
     {
         int whiteMaterial = CountMaterial(B, true);
         int blackMaterial = CountMaterial(B, false);
@@ -33,7 +48,7 @@ public class MyBot : IChessBot
         return B.IsWhiteToMove ? eval : -eval;
     }
 
-    public static int CountMaterial(Board B, bool isWhite)
+    static int CountMaterial(Board B, bool isWhite)
     {
         int material = 0; // Assume there can be 0 kings for custom positions
         material += B.GetPieceList(PieceType.Pawn, isWhite).Count * ((int)PieceValue.Pawn);
@@ -45,55 +60,89 @@ public class MyBot : IChessBot
         return material;
     }
 
-    public Move Solve(Board B, Timer T)
+    Move Solve(Board B, Timer T)
     {
         nodeCount = 0;
         Move bestMove = default;
-        Move previousBestMove = default;
+        int previousScore = 0;
         int maxDepth = 40; // large cap, time will stop us
         for (int depth = 1; depth <= maxDepth; depth++)
         {
-            float bestScoreThisIteration = -MAX;
+            int window = 50;
+            int score = 0;
             Move bestMoveThisIteration = default;
-            Move[] moves = B.GetLegalMoves();
-            if (previousBestMove != default)
-                for (int i = 0; i < moves.Length; i++)
-                    if (moves[i] == previousBestMove)
-                    {
-                        (moves[0], moves[i]) = (moves[i], moves[0]);
-                        break;
-                    }
-            OrderMoves(moves, B);
-            foreach (Move move in moves)
+            for (int tries = 0; tries < 5; tries++)
             {
-                B.MakeMove(move);
-                float score = -Negamax(B, -MAX, MAX, depth - 1);
-                B.UndoMove(move);
+                int alpha = previousScore - window;
+                int beta = previousScore + window;
 
-                if (score > bestScoreThisIteration)
-                {
-                    bestScoreThisIteration = score;
-                    bestMoveThisIteration = move;
-                }
+                score = SearchRoot(B, depth, alpha, beta, out bestMoveThisIteration);
+
+                if (score > alpha && score < beta)
+                    break;
+
+                window *= 2;
+
+                if (tries == 4)
+                    score = SearchRoot(B, depth, -MAX, MAX, out bestMoveThisIteration);
             }
 
+            previousScore = score;
             bestMove = bestMoveThisIteration;
-            previousBestMove = bestMoveThisIteration;
 
             // Stop if we are low on time
+            if (T.MillisecondsRemaining < 500 && T.MillisecondsElapsedThisTurn > 10)
+                break;
+
+            // Max per move
             if (T.MillisecondsElapsedThisTurn > 500)
                 break;
 
-            Console.WriteLine($"Depth {depth} done. Best: {bestMove} Score: {bestScoreThisIteration}");
+            Console.WriteLine($"Depth {depth} done. Best: {bestMove} Score: {score}");
         }
         return bestMove;
     }
 
-    public float Negamax(Board B, float alpha, float beta, int depth)
+    int SearchRoot(Board B, int depth, int alpha, int beta, out Move bestMove)
     {
+        ulong key = B.ZobristKey;
+        TTEntry entry = TT[TTIndex(key)];
+        Move ttMove = entry.Key == key ? entry.BestMove : default;
+
+        Move[] moves = B.GetLegalMoves();
+        OrderMoves(moves, B, ttMove);
+
+        bestMove = default;
+
+        foreach (Move move in moves)
+        {
+            B.MakeMove(move);
+            int score = -Negamax(B, -beta, -alpha, depth - 1);
+            B.UndoMove(move);
+
+            if (score >= beta)
+            {
+                bestMove = move;
+                return score;
+            }
+
+            if (score > alpha)
+            {
+                alpha = score;
+                bestMove = move;
+            }
+        }
+
+        return alpha;
+    }
+
+    int Negamax(Board B, int alpha, int beta, int depth)
+    {
+        // 1. Assertions / bookkeeping
         Trace.Assert(alpha < beta);
         nodeCount++; // increment counter of explored nodes
 
+        // 2. Terminal checks
         if (B.IsDraw()) // check for draw game
             return 0;
         else if (B.IsInCheckmate())
@@ -103,60 +152,120 @@ public class MyBot : IChessBot
 
         // Check extension: if we are in check, we should search deeper. More info: https://www.chessprogramming.org/Check_Extensions
         bool inCheck = B.IsInCheck();
-        if (inCheck)
+        if (inCheck) // This can cause search explosion in tactical positions. TODO: Improve this
             depth++;
 
-        Move[] moves = B.GetLegalMoves();
-        OrderMoves(moves, B);
+        // 3. TT Lookup
+        ulong key = B.ZobristKey;
+        int ttIndex = TTIndex(key);
+        TTEntry entry = TT[ttIndex];
 
+        if (entry.Key == key && entry.Depth >= depth)
+        {
+            if (entry.Flag == 0) // exact
+                return entry.Score;
+
+            if (entry.Flag == 1 && entry.Score >= beta) // lower bound
+                return entry.Score;
+
+            if (entry.Flag == 2 && entry.Score <= alpha) // upper bound
+                return entry.Score;
+        }
+
+        // 4. Depth == 0 → quiescence
+
+        // TT
+
+        int originalAlpha = alpha;
+        Move bestMove = default;
+
+        // 5.Move generation
+        Move[] moves = B.GetLegalMoves();
+
+        OrderMoves(moves, B, entry.BestMove);
+
+        // 6. Search loop
         foreach (Move move in moves) // compute the score of all possible next move and keep the best one
         {
             B.MakeMove(move);               // It's opponent turn in P2 position after current player plays x column.
-            float score = -Negamax(B, -beta, -alpha, depth - 1); // explore opponent's score within [-beta;-alpha] windows:
+            int score = -Negamax(B, -beta, -alpha, depth - 1); // explore opponent's score within [-beta;-alpha] windows:
             B.UndoMove(move); // no need to have good precision for score better than beta (opponent's score worse than -beta)
                                                         // no need to check for score worse than alpha (opponent's score worse better than -alpha)
             if (score >= beta) // prune the exploration if we find a possible move better than what we were looking for.
+            {
+                // Store LOWERBOUND before returning
+                if (TT[ttIndex].Key != key || depth >= TT[ttIndex].Depth)
+                    TT[ttIndex] = new TTEntry
+                    {
+                        Key = key,
+                        Score = score,
+                        Depth = depth,
+                        Flag = 1, // LOWERBOUND
+                        BestMove = move
+                    };
                 return score;
+            }
             if (score > alpha) // reduce the [alpha;beta] window for next exploration, as we only
-                alpha = score;  // need to search for a position that is better than the best so far.
+                (alpha, bestMove) = (score, move);  // need to search for a position that is better than the best so far.
         }
+        // 7.Store TT entry
+        // Decide TT flag
+        byte flag;
+
+        if (alpha >= beta)
+            flag = 1;          // LOWERBOUND
+        else if (alpha <= originalAlpha)
+            flag = 2;          // UPPERBOUND
+        else
+            flag = 0;          // EXACT
+
+        TT[ttIndex] = new TTEntry
+        {
+            Key = key,
+            Score = alpha,
+            Depth = depth,
+            Flag = flag,
+            BestMove = bestMove
+        };
+
+        // 8. Return score
         return alpha;
     }
 
-    public static float SearchAllCaptures(Board B, float alpha, float beta)
+    static int SearchAllCaptures(Board B, int alpha, int beta)
     {
-        float eval =  Evaluate(B);
-        if (eval + 900 < alpha)
-            return alpha; //unsure
+        int eval =  Evaluate(B);
         if (eval >= beta)
-            return beta;
+            return beta; // fail soft
         alpha = Math.Max(alpha, eval);
 
         Move[] moves = B.GetLegalMoves(true);
         OrderMoves(moves, B);
         foreach (Move move in moves)
         {
-            if ((int)move.CapturePieceType < (int)move.MovePieceType)
+            if ((int)move.CapturePieceType < (int)move.MovePieceType) // TODO: Remove this with better SEE (Static Exchange Evaluation)
                 continue; // skip bad trades
             B.MakeMove(move);
             eval = -SearchAllCaptures(B, -beta, -alpha);
             B.UndoMove(move);
 
             if (eval >= beta)
-                return beta;
+                return beta; // fail soft
             alpha = Math.Max(alpha, eval);
         }
 
         return alpha;
     }
 
-    public static void OrderMoves(Move[] moves, Board B)
+    static void OrderMoves(Move[] moves, Board B, Move ttMove = default)
     {
         int[] scores = new int[moves.Length];
         for (int i = 0; i < moves.Length; i++)
         {
             int score = 0;
             Move move = moves[i];
+            if (move == ttMove)
+                score += 1000000;
             if (move.IsPromotion)
                 score += (int)(PieceValue)move.PromotionPieceType;
             if (move.IsCapture) // Prioritise big gains captures
@@ -171,10 +280,11 @@ public class MyBot : IChessBot
                 score -= (int)(PieceValue)move.MovePieceType;
             scores[i] = score;
         }
-        Sort(moves, scores);
+        Array.Sort(scores, moves);
+        Array.Reverse(moves);
     }
 
-    public static int PieceScopeImprovement(Move move, Board B)
+    static int PieceScopeImprovement(Move move, Board B)
     {
         return move.MovePieceType switch
         {
@@ -184,7 +294,7 @@ public class MyBot : IChessBot
         };
     }
 
-    public static bool IsSquareAttackedByEnemyPawns(Square S, Board B)
+    static bool IsSquareAttackedByEnemyPawns(Square S, Board B)
     {
         ulong ourPawnMoveAttacks = BitboardHelper.GetPawnAttacks(S, B.IsWhiteToMove);
         ulong enemyPawns = B.GetPieceBitboard(PieceType.Pawn, !B.IsWhiteToMove);
@@ -196,7 +306,7 @@ public class MyBot : IChessBot
     /// </summary>
     /// <param name="moves"></param>
     /// <returns></returns>
-    public static int DevelopPieces(Move move, Board B, int score)
+    static int DevelopPieces(Move move, Board B, int score)
     {
         if (move.MovePieceType == PieceType.Knight)
             score += PieceScopeImprovement(move, B) * 2;
@@ -210,20 +320,5 @@ public class MyBot : IChessBot
             if ((move.TargetSquare.File == 3 || move.TargetSquare.File == 4) && !IsSquareAttackedByEnemyPawns(move.TargetSquare, B))
                 score += 20;
         return score;
-    }
-
-    public static void Sort(Move[] moves, int[] scores)
-    {
-        // Sort the moves list based on scores
-        for (int i = 0; i < moves.Length - 1; i++)
-            for (int j = i + 1; j > 0; j--)
-            {
-                int swapIndex = j - 1;
-                if (scores[swapIndex] < scores[j])
-                {
-                    (moves[j], moves[swapIndex]) = (moves[swapIndex], moves[j]);
-                    (scores[j], scores[swapIndex]) = (scores[swapIndex], scores[j]);
-                }
-            }
     }
 }

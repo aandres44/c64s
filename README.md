@@ -1,34 +1,8 @@
-# Chess Coding Challenge (C#)
+# Based on 'Chess Coding Challenge' from SebLangue (C#)
 Welcome to the [chess coding challenge](https://youtu.be/iScy18pVR58)! This is a friendly competition in which your goal is to create a small chess bot (in C#) using the framework provided in this repository.
 Once submissions close, these bots will battle it out to discover which bot is best!
 
-I will then create a video exploring the implementations of the best and most unique/interesting bots.
-I also plan to make a small game that features these most interesting/challenging entries, so that everyone can try playing against them.
-
-## Submissions are now closed
-Thank you so much to everyone who participated -- in total, 636 chess bots were submitted. Also, a huge extra thanks to everyone who contributed code, reported bugs in the framework (sorry about those!), and gave their time to help others getting started with the intricacies of chess programming.
-
-The results video is now out over [here](https://youtu.be/Ne40a5LkK6A).
-And the tournament data can be found [here](https://github.com/SebLague/Tiny-Chess-Bot-Challenge-Results).
-
-## Change Log
-It has been necessary to make some bug fixes to the original project, and I've also been tempted (by some great suggestions from the community) into making a few non-breaking improvements/additions to the API. I realize that changes can be frustrating during a challenge though, and so will commit to freezing the API from August 1st.
-
-* <b>V1.1</b> Fixed major bug affecting `board.GetPiece()` and `PieceList` functions. Added `Board.CreateBoardFromFEN()`.
-* <b>V1.11</b> UI changes: Added coordinate names to board UI and fixed human player input bug.
-* <b>V1.12</b> Small fixes to `board.IsDraw()`: Fifty move counter is now updated properly during search, and insufficient material is now detected for lone bishops on the same square colour.
-* <b>V1.13</b> Fixed issue with `board.ZobristKey` where value would sometimes be different after making and undoing a move. Added an alternative function for getting moves `board.GetLegalMovesNonAlloc()` (see docs for more info).
-* <b>V1.14</b> A handful of additions to the Board API: `board.IsInsufficientMaterial()`, `board.IsRepeatedPosition()`, `board.GameRepetitionHistory`, `board.FiftyMoveCounter`, `board.GameMoveHistory`, `board.GameStartFenString`.
-* <b>V1.15</b> Fixed incorrect `move.CapturePieceType` for en-passant moves and moves in `board.GameMoveHistory`. Added `BitboardHelper.VisualizeBitboard()` to help with debugging bitboards.
-* <b>V1.16</b> Added `timer.GameStartTimeMilliseconds`, `timer.OpponentMillisecondsRemaining`, `board.ForceSkipTurn()`.
-* <b>V1.17</b> Added `BitboardHelper.GetPieceAttacks()` and optimized `board.SquareIsAttackedByOponent()`. Writing `#DEBUG` in a comment will now exclude code in that line from counting towards the token limit (for testing only of course).
-* <b>V1.18</b> Added `timer.IncrementMilliseconds` (this will be 0 for the main tournament, but a small increment may be used in the final playoff games). Fixed a bug in the repetition handling, and optimized check/stalemate detection.
-* <b>V1.19</b> Fixed potential out of bounds exception. Fixed bug in stalemate detection.
-* <b>V1.20</b> Fixed (another) bug in the repetition detection.
-
-[There will be no API changes after August 1]
-
-## How to Participate
+## How to use
 * Install an IDE such as [Visual Studio](https://visualstudio.microsoft.com/downloads/).
 * Install [.NET 6.0](https://dotnet.microsoft.com/en-us/download)
 * Download this repository and open the Chess-Challenge project in your IDE.
@@ -42,8 +16,6 @@ It has been necessary to make some bug fixes to the original project, and I've a
     * You can play against the bot yourself (Human vs Bot)
     * The bot can play a match against itself (MyBot vs MyBot)
     * The bot can play a match against a simple example bot (MyBot vs EvilBot).<br>You could also replace the EvilBot code with your own code, to test two different versions of your bot against one another.
-* Once you're happy with your chess bot, head over to the [Submission Page](https://forms.gle/6jjj8jxNQ5Ln53ie6) to enter it into the competition.
-  * You will be able to edit your entry up until the competition closes.
 
 ## Rules
 * You may participate alone, or in a group of any size.
